@@ -57,6 +57,15 @@ else
     log_warn "mysql_8.0.tar.gz no encontrado, se descargara al iniciar (requiere internet)"
 fi
 
+ASTERISK_TAR=$(ls -t asterisk_*.tar.gz 2>/dev/null | head -1)
+if [ -n "$ASTERISK_TAR" ]; then
+    log_info "Importando Asterisk ($ASTERISK_TAR)..."
+    gunzip -c "$ASTERISK_TAR" | docker load
+    log_success "Asterisk importado"
+else
+    log_warn "No se encontro asterisk_*.tar.gz (Asterisk no estara disponible)"
+fi
+
 BACKEND_TAR=$(ls -t backend_*.tar.gz 2>/dev/null | head -1)
 if [ -n "$BACKEND_TAR" ]; then
     log_info "Importando Backend ($BACKEND_TAR)..."
@@ -79,7 +88,7 @@ fi
 
 echo ""
 log_info "Imagenes disponibles:"
-docker images --format '  {{.Repository}}:{{.Tag}}  ({{.Size}})' | grep -E 'asistentevirtual|mysql'
+docker images --format '  {{.Repository}}:{{.Tag}}  ({{.Size}})' | grep -E 'asistentevirtual|mysql|asterisk'
 echo ""
 
 # ==========================================
@@ -161,6 +170,7 @@ echo "============================================"
 echo ""
 echo "  Frontend:    http://localhost:${FRONTEND_PORT}"
 echo "  Backend API: http://localhost:${BACKEND_PORT}/api/health"
+echo "  Asterisk:    localhost:5060 (SIP) / localhost:5038 (AMI)"
 echo "  MySQL:       localhost:3306"
 echo ""
 echo "  Comandos utiles:"

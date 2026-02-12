@@ -35,8 +35,8 @@ monitor_system/logs/
 docker-export/*.tar.gz
 docker-export/*.sql
 
-# Docker mysql init (only root-level)
-/docker/
+# Docker local config (mysql init data)
+/docker/mysql/
 
 # IDE
 .vscode/

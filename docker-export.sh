@@ -44,6 +44,7 @@ $COMPOSE_CMD build
 # Obtener nombres de las imagenes
 BACKEND_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "asistentevirtual.*backend|entel.*backend" | head -1)
 FRONTEND_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "asistentevirtual.*frontend|entel.*frontend" | head -1)
+ASTERISK_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "asistentevirtual.*asterisk|entel.*asterisk" | head -1)
 
 # Si no se encontraron, usar nombres por defecto
 if [ -z "$BACKEND_IMAGE" ]; then
@@ -52,10 +53,14 @@ fi
 if [ -z "$FRONTEND_IMAGE" ]; then
     FRONTEND_IMAGE="asistentevirtual-frontend:latest"
 fi
+if [ -z "$ASTERISK_IMAGE" ]; then
+    ASTERISK_IMAGE="asistentevirtual-asterisk:latest"
+fi
 
 log_info "Imagenes a exportar:"
 echo "  - Backend:  $BACKEND_IMAGE"
 echo "  - Frontend: $FRONTEND_IMAGE"
+echo "  - Asterisk: $ASTERISK_IMAGE"
 echo "  - MySQL:    mysql:8.0"
 echo ""
 
@@ -67,6 +72,10 @@ log_success "Backend exportado: $EXPORT_DIR/backend_${TIMESTAMP}.tar.gz"
 log_info "Exportando imagen del frontend..."
 docker save $FRONTEND_IMAGE | gzip > "$EXPORT_DIR/frontend_${TIMESTAMP}.tar.gz"
 log_success "Frontend exportado: $EXPORT_DIR/frontend_${TIMESTAMP}.tar.gz"
+
+log_info "Exportando imagen de Asterisk..."
+docker save $ASTERISK_IMAGE | gzip > "$EXPORT_DIR/asterisk_${TIMESTAMP}.tar.gz"
+log_success "Asterisk exportado: $EXPORT_DIR/asterisk_${TIMESTAMP}.tar.gz"
 
 log_info "Exportando imagen de MySQL..."
 docker pull mysql:8.0
@@ -81,10 +90,13 @@ cp -r docker/ "$EXPORT_DIR/" 2>/dev/null || true
 
 # Generar docker-compose.yml para despliegue offline (image: en vez de build:)
 log_info "Generando docker-compose.yml para despliegue offline..."
-awk -v backend="$BACKEND_IMAGE" -v frontend="$FRONTEND_IMAGE" '
+awk -v backend="$BACKEND_IMAGE" -v frontend="$FRONTEND_IMAGE" -v asterisk="$ASTERISK_IMAGE" '
     /^[[:space:]]*build:/ { in_build=1; next }
     in_build && /^[[:space:]]*(context|dockerfile):/ { next }
     in_build { in_build=0 }
+    /container_name: entel-asterisk/ && !asterisk_done {
+        print "    image: " asterisk; asterisk_done=1
+    }
     /container_name: entel-backend/ && !backend_done {
         print "    image: " backend; backend_done=1
     }
@@ -110,6 +122,9 @@ echo "============================================"
 echo "Importando MySQL..."
 gunzip -c mysql_8.0.tar.gz | docker load
 
+echo "Importando Asterisk..."
+gunzip -c asterisk_*.tar.gz | docker load
+
 echo "Importando Backend..."
 gunzip -c backend_*.tar.gz | docker load
 
@@ -122,7 +137,7 @@ echo ""
 echo "Proximos pasos:"
 echo "  1. cp .env.example .env"
 echo "  2. nano .env  # Editar variables"
-echo "  3. docker-compose up -d"
+echo "  3. docker compose up -d"
 echo ""
 EOF
 chmod +x "$EXPORT_DIR/docker-import.sh"

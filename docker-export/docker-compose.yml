@@ -1,15 +1,14 @@
 # ============================================
 # Docker Compose - Sistema de Monitoreo VoIP
 # ============================================
-# Compatible con RHEL/CentOS, Debian/Ubuntu y derivados
+# Despliegue offline (usa image: en vez de build:)
 #
 # Uso:
-#   Construir:       docker-compose build
-#   Iniciar:         docker-compose up -d
-#   Detener:         docker-compose down
-#   Logs:            docker-compose logs -f
-#   Ver estado:      docker-compose ps
-#   Reiniciar todo:  docker-compose restart
+#   Iniciar:         docker compose up -d
+#   Detener:         docker compose down
+#   Logs:            docker compose logs -f
+#   Ver estado:      docker compose ps
+#   Reiniciar todo:  docker compose restart
 # ============================================
 
 services:
@@ -41,6 +40,28 @@ services:
       start_period: 30s
 
   # ==========================================
+  # Asterisk 16 PBX
+  # ==========================================
+  asterisk:
+    image: asistentevirtual-asterisk:latest
+    container_name: entel-asterisk
+    restart: unless-stopped
+    ports:
+      - "${ASTERISK_SIP_PORT:-5060}:5060/udp"
+      - "${ASTERISK_SIP_PORT:-5060}:5060/tcp"
+      - "${ASTERISK_AMI_PORT:-5038}:5038"
+    volumes:
+      - asterisk-config:/etc/asterisk
+    networks:
+      - entel-network
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ==========================================
   # Backend API - Node.js
   # ==========================================
   backend:
@@ -49,6 +70,8 @@ services:
     restart: unless-stopped
     depends_on:
       mysql:
+        condition: service_healthy
+      asterisk:
         condition: service_healthy
     environment:
       # Base de datos MySQL
@@ -83,6 +106,7 @@ services:
     volumes:
       - backend-data:/app/data
       - backend-logs:/app/logs
+      - asterisk-config:/etc/asterisk
     ports:
       - "${BACKEND_PORT:-8082}:8082"
     networks:
@@ -148,6 +172,8 @@ services:
 # ==========================================
 volumes:
   mysql-data:
+    driver: local
+  asterisk-config:
     driver: local
   backend-data:
     driver: local
