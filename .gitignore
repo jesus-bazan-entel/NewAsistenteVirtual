@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Environment files
+.env
+*.entel.env
+!.env.example
+!.env.docker.example
+
+# Compiled/build assets
+entel_frontend/public/build/
+entel_frontend/public/hot
+
+# Laravel storage
+entel_frontend/storage/logs/*
+entel_frontend/storage/framework/cache/*
+entel_frontend/storage/framework/sessions/*
+entel_frontend/storage/framework/views/*
+entel_frontend/storage/app/*
+entel_frontend/bootstrap/cache/*
+
+# SQLite databases
+monitor_system/app/data/*.sqlite
+
+# Logs
+*.log
+monitor_system/logs/
+
+# Tarballs and large binary files
+*.tar.gz
+*.sql
+
+# Docker export images (large binaries)
+docker-export/*.tar.gz
+docker-export/*.sql
+
+# Docker mysql init (only root-level)
+/docker/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+entel_frontend_backup_laravel7/

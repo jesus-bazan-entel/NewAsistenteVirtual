@@ -1,0 +1,34 @@
+
+            [Base1_Miraflores]
+            type=friend
+            disallow=all
+            allow=ulaw,alaw,g729
+            context=entrantes
+            qualify=yes
+            dtmfmode=RFC2833
+            host=10.68.3.252
+            directmedia=no
+            insecure=invite,port
+            
+            [PBX_UC300]
+            type=friend
+            disallow=all
+            allow=ulaw,alaw,g729
+            context=entrantes
+            qualify=yes
+            dtmfmode=RFC2833
+            host=10.66.1.68
+            directmedia=no
+            insecure=invite,port
+            
+            [Base1_San_Borja]
+            type=friend
+            disallow=all
+            allow=ulaw,alaw,g729
+            context=entrantes
+            qualify=yes
+            dtmfmode=RFC2833
+            host=10.68.140.84
+            directmedia=no
+            insecure=invite,port
+            
