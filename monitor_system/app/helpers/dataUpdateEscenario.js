@@ -113,6 +113,9 @@ const hangUp = async(event) => {
             }
         ],
     });
+    if (!escenario) {
+        return;
+    }
     //console.log(cause);
     let hangupReason = {
         cause: cause,
@@ -122,15 +125,13 @@ const hangUp = async(event) => {
     escenario.update({
         hangupReason: JSON.stringify(hangupReason)
     });
-    if (escenario) {
-        escenario.canal_origen.update({
+    escenario.canal_origen.update({
+        estado_llamada: 'LIBRE',
+    });
+    if(escenario.destino){
+        escenario.destino.update({
             estado_llamada: 'LIBRE',
         });
-        if(escenario.destino){
-            escenario.destino.update({
-                estado_llamada: 'LIBRE',
-            });
-        }
     }
 };
 
