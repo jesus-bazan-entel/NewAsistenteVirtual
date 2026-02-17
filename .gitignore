@@ -32,6 +32,7 @@ monitor_system/logs/
 *.sql
 
 # Docker export images (large binaries)
+deploy/
 docker-export/*.tar.gz
 docker-export/*.sql
 
