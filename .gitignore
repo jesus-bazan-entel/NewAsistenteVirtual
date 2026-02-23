@@ -17,11 +17,14 @@ frontend/dist/
 
 # ──── Tarballs, SQL dumps, large binaries ────
 *.tar.gz
+*.tar
 *.sql
 
 # ──── Docker / Deploy artifacts ────
 deploy/
 docker-export/
+docker/ssl/
+docker/data/db/
 
 # ──── IDE ────
 .vscode/

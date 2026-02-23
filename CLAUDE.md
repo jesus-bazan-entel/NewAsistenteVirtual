@@ -43,11 +43,10 @@ npm run build            # TypeScript check + production build to dist/
 npm run preview          # Preview production build
 ```
 
-### Docker — Production (Asterisk only)
+### Docker — Production (Full Stack)
 
 ```bash
-# PostgreSQL, Backend, and Frontend run natively on the server.
-# Only Asterisk PBX is containerized.
+# All 4 services: PostgreSQL, Backend, Frontend (Nginx+SSL), Asterisk
 docker compose -f docker/docker-compose.yml build
 docker compose -f docker/docker-compose.yml up -d
 docker compose -f docker/docker-compose.yml logs -f
@@ -57,43 +56,50 @@ docker compose -f docker/docker-compose.yml exec asterisk asterisk -rvvv
 ### Docker — Full Dev Stack
 
 ```bash
-# Adds: cargo-watch, Vite HMR, pgAdmin, MailHog
+# Adds: cargo-watch, Vite HMR, pgAdmin, MailHog, exposed PostgreSQL port
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 ```
 
 ### Offline Deployment
 
 ```bash
-# Build and export all images for air-gapped servers
+# Build all images, dump DB, and package into a single tar.gz
 bash docker/scripts/build-and-export.sh
 
-# On target server — import and start
-bash docker/scripts/import-and-deploy.sh
+# On target server — extract, deploy (loads images, generates SSL, restores DB)
+cd /opt && tar -xzf asistente-virtual-deploy-*.tar.gz
+cd asistente-virtual-deploy-*
+sudo bash deploy.sh
 ```
 
 ### Access URLs
 
-| Service | Docker Dev | Local Dev |
-|---------|-----------|-----------|
-| Frontend | http://localhost | http://localhost:5173 |
-| Backend API | http://localhost:3000 | http://localhost:3000 |
-| Health Check | http://localhost:3000/api/health | http://localhost:3000/api/health |
-| WebSocket | ws://localhost:3000/ws | ws://localhost:3000/ws |
-| pgAdmin (dev) | http://localhost:5050 | — |
-| MailHog (dev) | http://localhost:8025 | — |
+| Service | Docker Prod | Docker Dev | Local Dev |
+|---------|------------|-----------|-----------|
+| Frontend (HTTPS) | https://localhost | — | — |
+| Frontend (HTTP) | http://localhost (→HTTPS) | http://localhost | http://localhost:5173 |
+| Backend API | internal only | internal only | http://localhost:3000 |
+| Health Check | https://localhost/api/health | http://localhost/api/health | http://localhost:3000/api/health |
+| WebSocket | wss://localhost/ws/ | ws://localhost/ws/ | ws://localhost:3000/ws |
+| PostgreSQL | internal only | localhost:5432 | localhost:5432 |
+| pgAdmin (dev) | — | http://localhost:5050 | — |
+| MailHog (dev) | — | http://localhost:8025 | — |
 
 ## Architecture
 
 ### Communication Flow
 
 ```
-Browser → Nginx (Port 80) ─┬─ /api/* ──→ Rust API (Port 3000) → PostgreSQL
-                            ├─ /ws/* ───→ Rust API (WebSocket)
-                            └─ /* ──────→ React SPA (static)
-                                          Rust API → Asterisk PBX (AMI :5038)
+Browser → Nginx (80/443) ──┬─ /api/* ──→ Rust API (3000, internal) → PostgreSQL (5432, internal)
+                           ├─ /ws/* ───→ Rust API (WebSocket)
+                           └─ /* ──────→ React SPA (static)
+                                         Rust API → Asterisk PBX (AMI :5038, host network)
 ```
 
 In local dev, Vite proxies `/api` and `/ws` to `localhost:3000` directly.
+
+**Ports exposed to host**: 80 (HTTP→HTTPS redirect), 443 (HTTPS), 5060 (SIP), 10000-20000 (RTP).
+PostgreSQL and Backend are internal only (not exposed to host).
 
 ### backend/ (Rust)
 
@@ -268,33 +274,53 @@ Same variables as above, plus:
 
 ### Production (docker/docker-compose.yml)
 
-Only Asterisk PBX is containerized. PostgreSQL, backend, and frontend run natively.
+Full-stack Docker setup with 4 services:
 
-- **asterisk** — Debian Bullseye with legacy chan_sip. Host network mode (ports 5060 SIP, 5038 AMI). Mounts dynamic monitoreo configs from `docker/data/asterisk/`.
+| Service | Container | Ports (host) | Network | Notes |
+|---------|-----------|-------------|---------|-------|
+| postgres | av-postgres | — (internal) | app-network | PostgreSQL 16-alpine, data in `pg-data` volume |
+| backend | av-backend | — (internal) | app-network | Rust API, depends on postgres (healthy) |
+| frontend | av-frontend | 80, 443 | app-network | Nginx + React SPA + SSL, depends on backend (healthy) |
+| asterisk | av-asterisk | 5060, 5038, 10000-20000 | host | Debian Bullseye + chan_sip |
+
+SSL: Self-signed certificate generated at build time (embedded in image). At deploy time, certificates are mounted from `./ssl/` volume for customization.
 
 ### Development Overlay (docker/docker-compose.dev.yml)
 
-Adds containerized versions of all services:
+Extends production compose with dev tooling:
 
 | Service | Container | Port | Notes |
 |---------|-----------|------|-------|
-| backend | av-backend-dev | 3000 | cargo-watch live reload |
+| postgres | av-postgres | 5432 | Exposed for local tools |
+| backend | av-backend-dev | 3000 (internal) | cargo-watch live reload |
 | frontend | av-frontend-dev | 80 | Nginx proxying to Vite |
 | frontend-dev | av-vite-dev | 5173 | Vite HMR |
 | pgadmin | av-pgadmin | 5050 | admin@asistente.local / admin |
 | mailhog | av-mailhog | 1025/8025 | SMTP capture + web UI |
 
-Network: custom bridge `entel-network` (172.28.0.0/16).
+Network: `app-network` (bridge).
+
+### Offline Deployment
+
+The `build-and-export.sh` script creates a self-contained `.tar.gz` with:
+- 4 Docker images (`.tar` files)
+- PostgreSQL database dump (`data/db/dump.sql`)
+- Asterisk dynamic configs (`data/asterisk/`)
+- Deploy-only `docker-compose.yml` (image references only, no build)
+- `deploy.sh` script (loads images, generates SSL cert, restores DB)
+- `.env` configuration
+
+On the target server, only Docker is required — no other dependencies.
 
 ### Nginx (docker/nginx/)
 
 - `dev.conf` — Proxies `/api/` and `/ws/` to backend:3000, everything else to Vite dev server
-- `prod.conf` — Serves React static files, proxies API/WS, gzip compression, 1-year static asset cache
+- `prod.conf` — HTTP→HTTPS redirect, SSL termination, serves React static files, proxies API/WS, gzip compression, 1-year static asset cache
 
 ### Asterisk (docker/asterisk/)
 
 - Built on Debian Bullseye (legacy chan_sip support, PJSIP disabled)
 - `entrypoint.sh` auto-generates `manager.conf` from env vars
-- Static configs: `sip.conf`, `extensions.conf`, `modules.conf`
+- Static configs: `sip.conf`, `extensions.conf`, `modules.conf`, `rtp.conf` (ports 10000-20000)
 - Dynamic configs (generated by backend): `sip.monitoreo.conf`, `extensions.monitoreo.conf`
 - Mounted from `docker/data/asterisk/`

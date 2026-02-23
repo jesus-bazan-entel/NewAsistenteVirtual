@@ -1,22 +1,117 @@
 # ============================================
-# Docker Compose - AsistenteVirtual
+# Docker Compose - AsistenteVirtual (Full Stack)
 # ============================================
-# Solo Asterisk PBX dockerizado.
-# PostgreSQL, Backend y Frontend corren nativos en el servidor.
+# 4 services: PostgreSQL, Backend, Frontend (Nginx+SSL), Asterisk
 #
-# Uso:
-#   Construir:       docker compose -f docker/docker-compose.yml build
-#   Iniciar:         docker compose -f docker/docker-compose.yml up -d
-#   Detener:         docker compose -f docker/docker-compose.yml down
-#   Logs:            docker compose -f docker/docker-compose.yml logs -f
-#   CLI Asterisk:    docker compose -f docker/docker-compose.yml exec asterisk asterisk -rvvv
+# Usage:
+#   Build:       docker compose -f docker/docker-compose.yml build
+#   Start:       docker compose -f docker/docker-compose.yml up -d
+#   Stop:        docker compose -f docker/docker-compose.yml down
+#   Logs:        docker compose -f docker/docker-compose.yml logs -f
+#   Asterisk:    docker compose -f docker/docker-compose.yml exec asterisk asterisk -rvvv
 # ============================================
 
 services:
   # ==========================================
+  # PostgreSQL 16
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: av-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-asistente_virtual}
+      POSTGRES_USER: ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform123}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform} -d ${POSTGRES_DB:-asistente_virtual}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - app-network
+
+  # ==========================================
+  # Backend - Rust/Axum API
+  # ==========================================
+  backend:
+    image: av-backend:latest
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: av-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD:-platform123}@postgres:5432/${POSTGRES_DB:-asistente_virtual}
+      PORT: ${PORT:-3000}
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-random-secret-in-production}
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      FRONTEND_URL: ${FRONTEND_URL:-https://localhost}
+      ASTERISK_HOST: ${ASTERISK_HOST:-host.docker.internal}
+      ASTERISK_PORT: ${ASTERISK_PORT:-5038}
+      ASTERISK_USER: ${ASTERISK_USER:-admin}
+      ASTERISK_PASSWORD: ${ASTERISK_PASSWORD:-admin}
+      ASTERISK_ENV: ${ASTERISK_ENV:-docker}
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      FTP_HOST: ${FTP_HOST:-}
+      FTP_USER: ${FTP_USER:-}
+      FTP_PWD: ${FTP_PWD:-}
+      LDAP_HOST: ${LDAP_HOST:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-}
+      LDAP_BASE_USER: ${LDAP_BASE_USER:-}
+      LDAP_TIMEOUT: ${LDAP_TIMEOUT:-5000}
+      RUST_LOG: ${RUST_LOG:-info}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+
+  # ==========================================
+  # Frontend - Nginx + React SPA + SSL
+  # ==========================================
+  frontend:
+    image: av-frontend:latest
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    container_name: av-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${SSL_CERT_DIR:-./ssl}:/etc/nginx/ssl:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - app-network
+
+  # ==========================================
   # Asterisk PBX
   # ==========================================
   asterisk:
+    image: av-asterisk:latest
     build:
       context: ./asterisk
       dockerfile: Dockerfile
@@ -37,3 +132,16 @@ services:
       retries: 5
       start_period: 10s
 
+# ==========================================
+# Volumes
+# ==========================================
+volumes:
+  pg-data:
+    driver: local
+
+# ==========================================
+# Networks
+# ==========================================
+networks:
+  app-network:
+    driver: bridge

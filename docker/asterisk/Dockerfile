@@ -23,6 +23,7 @@ COPY manager.conf /etc/asterisk/manager.conf
 COPY sip.conf /etc/asterisk/sip.conf
 COPY extensions.conf /etc/asterisk/extensions.conf
 COPY modules.conf /etc/asterisk/modules.conf
+COPY rtp.conf /etc/asterisk/rtp.conf
 
 # Create empty monitoreo files (generated dynamically by backend)
 RUN touch /etc/asterisk/sip.monitoreo.conf \
