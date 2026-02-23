@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-entel-dark text-white;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/[0.03] border border-white/[0.06] rounded-2xl backdrop-blur-sm;
+  }
+  .btn-primary {
+    @apply bg-gradient-to-r from-entel-orange to-entel-amber text-white font-medium rounded-xl px-6 py-2.5 transition-all duration-200 hover:shadow-lg hover:shadow-entel-orange/25 hover:-translate-y-0.5;
+  }
+  .btn-secondary {
+    @apply border border-white/10 text-white/70 font-medium rounded-xl px-6 py-2.5 transition-all duration-200 hover:bg-white/5 hover:border-white/20;
+  }
+  .btn-danger {
+    @apply bg-red-500/10 border border-red-500/20 text-red-400 font-medium rounded-xl px-6 py-2.5 transition-all duration-200 hover:bg-red-500/20;
+  }
+  .input-field {
+    @apply w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-entel-orange/50 focus:border-entel-orange/50 transition-all duration-200;
+  }
+  .select-field {
+    @apply w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-entel-orange/50 focus:border-entel-orange/50 transition-all duration-200;
+  }
+}

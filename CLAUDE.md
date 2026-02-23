@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a monorepo containing two interconnected projects for a VoIP call testing and monitoring system:
+Monorepo for a VoIP call testing and monitoring system. Manages SIM gateways, test matrices, and automated call scenarios via Asterisk PBX.
 
-- **monitor_system/** - Node.js Express REST API backend (Sequelize 6, Express 4.17)
-- **entel_frontend/** - Laravel 11 + Inertia.js + Vue 3 web frontend (PHP 8.4)
-
-The frontend communicates with the backend via HTTP (Guzzle), and both share the same database (`db_entel`). The system integrates with Asterisk PBX for call origination and monitoring via AMI.
+- **backend/** — Rust 1.77 REST + WebSocket API (Axum 0.7, SQLx 0.7, PostgreSQL)
+- **frontend/** — React 18 SPA (TypeScript 5.5, Vite 5, Tailwind 3.4, Zustand 4)
+- **docker/** — Container configs (Asterisk PBX, Nginx, dev tooling)
+- **scripts/** — Migration utilities (MySQL → PostgreSQL)
 
 ## Default Credentials
 
@@ -17,212 +17,284 @@ The frontend communicates with the backend via HTTP (Guzzle), and both share the
 |------|----------|
 | demo@entel.com | demo123 |
 
-Created automatically by the backend seeder (`app/seeders/initialData.js`) on first startup.
+Created by the seed migration (`backend/migrations/20260222000099_seed_initial_data.sql`).
 
 ## Commands
 
-### Docker (Recommended for full stack)
+### Rust Backend (backend/)
 
 ```bash
-# Initial setup
-cp .env.docker .env
-
-# Start all services (MySQL, Backend, Frontend)
-docker-compose up -d
-
-# Development mode with hot-reload and dev tools (phpMyAdmin on :8080, MailHog on :8025)
-docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop all services
-docker-compose down
-
-# Rebuild after code changes
-docker-compose build && docker-compose up -d
-
-# Shell into containers
-docker-compose exec backend sh
-docker-compose exec frontend bash
-
-# Troubleshooting: check backend connectivity from frontend
-docker-compose exec frontend curl http://backend:8082/api/health
-
-# Troubleshooting: fix Laravel storage permissions
-docker-compose exec frontend chown -R www-data:www-data /var/www/html/storage
-docker-compose exec frontend chmod -R 775 /var/www/html/storage
+cd backend
+cargo run                # Start server on port 3000
+cargo build --release    # Release build
+cargo check              # Fast type-check without building
+cargo test               # Run tests
 ```
 
-### Node.js Backend (monitor_system/)
+Requires PostgreSQL running with the `DATABASE_URL` from `.env`.
+
+### React Frontend (frontend/)
 
 ```bash
-cd monitor_system
+cd frontend
 npm install
-npm run dev        # Start server on port 8082 (uses SQLite by default, no DB setup needed)
-npm run format     # Format code with js-beautify
+npm run dev              # Vite dev server on port 5173 (proxies /api → :3000)
+npm run build            # TypeScript check + production build to dist/
+npm run preview          # Preview production build
 ```
 
-No test runner is configured for the backend.
-
-### Laravel Frontend (entel_frontend/)
+### Docker — Production (Asterisk only)
 
 ```bash
-cd entel_frontend
-composer install
-npm install && npm run build    # Build frontend assets (Vite + Vue 3)
-npm run dev                     # Vite dev mode with HMR
-php artisan serve               # Start server on port 8000
-php artisan key:generate        # Generate APP_KEY (required for new installs)
+# PostgreSQL, Backend, and Frontend run natively on the server.
+# Only Asterisk PBX is containerized.
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml logs -f
+docker compose -f docker/docker-compose.yml exec asterisk asterisk -rvvv
+```
 
-# Testing
-php artisan test                # PHPUnit (tests/Unit/, tests/Feature/)
+### Docker — Full Dev Stack
 
-# Cache management
-php artisan cache:clear && php artisan config:clear
+```bash
+# Adds: cargo-watch, Vite HMR, pgAdmin, MailHog
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+```
+
+### Offline Deployment
+
+```bash
+# Build and export all images for air-gapped servers
+bash docker/scripts/build-and-export.sh
+
+# On target server — import and start
+bash docker/scripts/import-and-deploy.sh
 ```
 
 ### Access URLs
 
-| Service | Docker | Local Dev |
-|---------|--------|-----------|
-| Frontend | http://localhost | http://localhost:8000 |
-| Backend API | http://localhost:8082 | http://localhost:8082 |
-| Health Check | http://localhost:8082/api/health | http://localhost:8082/api/health |
-| phpMyAdmin (dev) | http://localhost:8080 | - |
-| MailHog (dev) | http://localhost:8025 | - |
+| Service | Docker Dev | Local Dev |
+|---------|-----------|-----------|
+| Frontend | http://localhost | http://localhost:5173 |
+| Backend API | http://localhost:3000 | http://localhost:3000 |
+| Health Check | http://localhost:3000/api/health | http://localhost:3000/api/health |
+| WebSocket | ws://localhost:3000/ws | ws://localhost:3000/ws |
+| pgAdmin (dev) | http://localhost:5050 | — |
+| MailHog (dev) | http://localhost:8025 | — |
 
 ## Architecture
 
 ### Communication Flow
 
 ```
-Browser → Laravel Frontend (Port 80) → HTTP/Guzzle → Node.js API (Port 8082) → Database
-                                                      ↓
-                                                Asterisk PBX (AMI)
+Browser → Nginx (Port 80) ─┬─ /api/* ──→ Rust API (Port 3000) → PostgreSQL
+                            ├─ /ws/* ───→ Rust API (WebSocket)
+                            └─ /* ──────→ React SPA (static)
+                                          Rust API → Asterisk PBX (AMI :5038)
 ```
 
-The frontend **never** talks to the database directly for business logic. All data flows through Laravel controllers that proxy HTTP requests to the Node.js API via `Http::get/post(env('API_URL') . 'endpoint')`.
+In local dev, Vite proxies `/api` and `/ws` to `localhost:3000` directly.
 
-### monitor_system (Node.js Backend)
+### backend/ (Rust)
 
-**Entry Point**: `server.js` — loads env, initializes Asterisk service, syncs DB, runs seeders, mounts routes.
+**Entry point**: `src/main.rs` — loads config, runs SQLx migrations, connects to Asterisk (non-blocking), starts Axum server.
 
-**Startup Flow**:
-1. Initializes Asterisk AMI connection (non-blocking, app works without it)
-2. Syncs database schema via Sequelize (auto-creates tables)
-3. Runs `app/seeders/initialData.js` if no users exist (creates profiles, users, sedes, technologies, operators)
-4. Starts Express server on PORT (default 8082)
+**Key directories**:
+- `src/models/` — 24 model files; structs for DB rows, create/update DTOs, and response types
+- `src/routes/` — 16 route files aggregated in `src/routes/mod.rs`, base path `/api/`
+- `src/services/` — Business logic: ejecucion, email (lettre), PDF (printpdf), FTP (ssh2)
+- `src/asterisk/` — AMI client (`ami.rs`), config generation (`config_gen.rs`), event handlers
+- `src/auth/` — JWT handlers, middleware extractor, bcrypt password verification
+- `src/scheduler/` — `pruebas_job.rs` (10s interval, executes scheduled tests)
+- `src/ws/` — WebSocket upgrade handler; broadcasts AMI events to connected clients
+- `src/config.rs` — Env-based config struct
+- `src/db.rs` — PgPool initialization (max 20 connections)
+- `src/error.rs` — `AppError` enum with HTTP status mapping
+- `migrations/` — 24 SQL migration files + 1 seed data migration
 
-**Key Directories**:
-- `app/models/` — 21 Sequelize models; associations defined in `app/models/index.js`
-- `app/controllers/` — 14 controllers, pattern: `{Entity}.controller.js`
-- `app/routes/` — 14 route files aggregated in `app/routes/index.js`, base path `/api/`
-- `app/services/` — Business logic: asterisk (AMI + config), ejecucion (test execution), ftp (SFTP), checker, log
-- `app/seeders/` — Initial data (profiles, default user, sedes, technologies)
-- `app/crons/` — `pruebasProgramadasJob.js` (scheduled test execution, disabled by default)
-- `app/helpers/` and `app/functions/` — Utility functions (pagination, etc.)
-- `app/templates/` — PDF and email templates
-- `app/data/` — SQLite database storage (when using sqlite dialect)
+**Shared state** (`Arc<AppState>`):
+- `PgPool` — database connection pool
+- `Config` — environment configuration
+- `broadcast::Sender<String>` — WebSocket event channel
+- `Arc<RwLock<Option<Arc<AmiClient>>>>` — Asterisk AMI connection
 
-**Controller Pattern**:
-```javascript
-exports.obtenerTodos = async (req, res) => {
-    // ...
-    res.json({ estado: true, data: results });
-};
-// Error: res.json({ estado: false, error: "message" });
+**API response pattern**:
+```json
+{ "estado": true, "data": ... }
+{ "estado": false, "error": "message" }
 ```
 
-**Authentication**: Dual-mode — LDAP (`app/config/ldap.js` + `AuthLdapController.js`) with bcrypt password fallback. Session tokens not used; the frontend manages sessions independently.
+**Authentication**: JWT (HS256) via `Authorization: Bearer <token>` header. Login returns token + user data with navigation menu built from profile permissions. Token claims: `{sub, correo, id_perfil, exp}`. Configurable expiration (default 24h). LDAP fallback supported.
 
-**Asterisk Integration**: AMI connection in `app/services/asterisk.server.service.js` for call origination (`peerToClient`, `clientToDialPlan`) and status monitoring.
+### frontend/ (React)
 
-### entel_frontend (Laravel 11 + Inertia.js + Vue 3)
+**Entry point**: `src/main.tsx` → `src/App.tsx` (BrowserRouter with route definitions).
 
-**Single-Page App**: One Blade template (`resources/views/app.blade.php`) serves the entire app. Vue 3 pages are resolved via Inertia from `resources/js/Pages/`.
+**Key directories**:
+- `src/api/` — Axios client with auth interceptor + typed API modules (auth, config-general, config-avanzada, pruebas)
+- `src/stores/` — Zustand stores: `authStore` (token/user, persisted to localStorage), `callStore` (real-time AMI events)
+- `src/hooks/` — `useAuth`, `useCrud<T>` (generic fetch with polling), `useWebSocket` (auto-reconnect)
+- `src/pages/` — Route-level page components organized by module
+- `src/components/ui/` — Button, Card, DataTable, Modal, Toast
+- `src/components/forms/` — TextInput, SelectInput
+- `src/components/layout/` — AppLayout, Header, Sidebar
+- `src/components/pruebas/` — MatrizEditor, EscenarioStatus
 
-**Entry Point**: `resources/js/app.js` — creates Inertia app with Vue 3, auto-resolves pages from `Pages/` directory.
+**Route protection**: `ProtectedRoute` wrapper checks `authStore.isAuthenticated`, redirects to `/` if false.
 
-**Key Directories**:
-- `app/Http/Controllers/` — 6 controllers that proxy all requests to the Node.js API
-- `app/Http/Middleware/ValidarSesion.php` — checks `Session::has('logeado')` for protected routes
-- `routes/web.php` — all routes with middleware groups
-- `resources/js/Pages/` — Inertia Vue 3 pages (Auth/, ConfigGeneral/, ConfigAvanzada/, GeneradorPruebas/, Reportes/, Disa/)
-- `resources/js/Components/` — reusable Vue components (Layout/, UI/, Forms/)
+**Styling**: Dark theme with glass-morphism. Brand colors: `entel-orange` (#ff6b35), `entel-amber` (#f7931e), `entel-dark` (#0a0a0f). Fonts: Outfit (sans), JetBrains Mono (mono).
 
-**Controller Pattern** (API proxy):
-```php
-public function getUsuarios() {
-    $response = Http::get(env('API_URL') . 'usuarios')->throw()->json();
-    return $response;
-}
-```
+## API Endpoints
 
-**Session Auth**: Login sets `Session::put('logeado', true)` and `Session::put('datos_usuario', $data)`. The `varificarSesion` middleware gate protects all non-public routes.
+All routes under `/api/`:
 
-**Route Prefixes**:
-- `/configuracion-general/` — Users, profiles, modules
-- `/configuracion-avanzada/` — Technologies, operators, equipment, external numbers
-- `/generador-pruebas/` — Test matrices, executions, launcher
-- `/reportes/` — Test and DISA reports
-- `/disa/` — DISA registry module
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| POST | `/auth/login` | Login (correo, clave) → JWT + menu |
+| GET/POST | `/usuarios` | User CRUD |
+| GET/POST | `/perfiles` | Profile CRUD (with submodule assignments) |
+| GET | `/modulos` | Navigation modules with submodules |
+| GET | `/sedes` | Location list |
+| GET/POST | `/tecnologias` | Technology CRUD |
+| GET/POST | `/operadores-telefonicos` | Carrier CRUD |
+| GET/POST | `/equipos` | Equipment CRUD (with nested channels) |
+| GET/PUT | `/canales` | Channel management |
+| GET/POST | `/numeros-externos` | External number CRUD |
+| GET/POST | `/matrices` | Test matrix CRUD |
+| GET/POST | `/pruebas` | Test definition CRUD |
+| POST | `/pruebas/ejecutar/c2c` | Execute channel-to-channel test |
+| POST | `/pruebas/ejecutar/matriz` | Execute matrix test |
+| POST | `/pruebas/:id/ejecutar` | Execute specific test |
+| GET | `/pruebas/:id/ultima-ejecucion` | Get last execution |
+| GET | `/ejecuciones` | List executions |
+| GET | `/ejecuciones/:id` | Execution details |
+| GET | `/ejecuciones/:id/escenarios` | Scenarios for execution |
+| GET | `/ejecuciones/:id/pdf` | Download PDF report |
+| POST | `/ejecuciones/:id/reenviar` | Resend report email |
+| GET/POST | `/registro-clave` | DISA key registrations |
+| GET/POST | `/ldap-config` | LDAP settings |
+| GET/PUT | `/asterisk-config` | Asterisk AMI config |
+| POST | `/asterisk-config/test` | Test AMI connection |
+| POST | `/asterisk-config/reconnect` | Force reconnect |
+| POST | `/asterisk-config/sync` | Sync configs to Asterisk |
+| GET | `/asterisk-config/status` | AMI connection status |
 
-**Styling**: Tailwind CSS 3.3 with custom theme — brand colors `entel-orange` (#ff6b35), `entel-amber` (#f7931e), `entel-dark` (#0a0a0f); fonts Outfit and JetBrains Mono. See `tailwind.config.js`.
+## Frontend Routes
+
+| Path | Page |
+|------|------|
+| `/` | Login |
+| `/principal` | Dashboard |
+| `/configuracion-general/usuarios` | User management |
+| `/configuracion-general/perfiles` | Profile/role management |
+| `/configuracion-general/ldap` | LDAP configuration |
+| `/configuracion-avanzada/tecnologias` | Technologies |
+| `/configuracion-avanzada/operadores-telefonicos` | Carriers/operators |
+| `/configuracion-avanzada/equipos` | Equipment & channels |
+| `/configuracion-avanzada/numeros-externos` | External numbers |
+| `/configuracion-avanzada/asterisk` | Asterisk AMI config |
+| `/generador-pruebas/matrices` | Test matrices |
+| `/generador-pruebas/matrices/:id` | Matrix detail editor |
+| `/generador-pruebas/lanzador-pruebas` | Test launcher |
+| `/reportes/reporte-pruebas` | Test execution reports |
 
 ## Database
 
-Both projects connect to database `db_entel`. The backend auto-creates schema via Sequelize sync.
+PostgreSQL database `asistente_virtual`. Schema managed by SQLx migrations in `backend/migrations/`.
 
-**All Models** (21, defined in `monitor_system/app/models/`):
-- **Auth/Config**: Usuarios, Perfiles, Modulos, Submodulos, PerfilSubmodulo, Sedes, LdapConfig, CredencialApi
-- **Advanced Config**: Tecnologias, OperadorTelefonico, TecnologiaOperador, Equipos, Canales, Numeroexterno
-- **Testing**: Pruebas, Matrices, MatrizCanalDestino, Ejecuciones, Escenarios, Errores
-- **DISA**: RegistroClave, CanalClave
+**Tables (25)**:
+- **Auth/Config**: usuarios, perfiles, modulos, submodulos, perfiles_submodulos, sedes, ldap_config, credenciales_api, asterisk_config
+- **VoIP Config**: tecnologias, operadores_telefonicos, tecnologias_operadores, equipos, canales, numeros_externos
+- **Testing**: matrices, matriz_canal_destino, pruebas, ejecuciones, escenarios, errores
+- **DISA**: registros_claves, canales_claves
 
-**Key Associations** (defined in `monitor_system/app/models/index.js`):
-- `Usuarios` → belongsTo `Perfiles`
-- `Perfiles` ↔ `Submodulos` (many-to-many via PerfilSubmodulo)
-- `Modulos` → hasMany `Submodulos`
-- `Pruebas` → belongsTo `Matrices`, belongsTo `Usuarios`, hasMany `Ejecuciones`
-- `Ejecuciones` → hasMany `Escenarios`
-- `Matrices` → hasMany `MatrizCanalDestino`
-- `Equipos` → hasMany `Canales`, belongsTo `Sedes`
-- `Canales` → belongsTo `TecnologiaOperador`
-- `Tecnologias` ↔ `OperadorTelefonico` (many-to-many via TecnologiaOperador)
-- `RegistroClave` ↔ `Canales` (many-to-many via CanalClave)
-- `Escenarios` → belongsTo `Canal` (origen/destino), belongsTo `Numeroexterno`, belongsTo `Errores`
+**Key associations**:
+- `usuarios` → belongsTo `perfiles`
+- `perfiles` ↔ `submodulos` (many-to-many via `perfiles_submodulos`)
+- `modulos` → hasMany `submodulos`
+- `pruebas` → belongsTo `matrices`, belongsTo `usuarios`, hasMany `ejecuciones`
+- `ejecuciones` → hasMany `escenarios`
+- `matrices` → hasMany `matriz_canal_destino`
+- `equipos` → hasMany `canales`, belongsTo `sedes`
+- `canales` → belongsTo `tecnologias_operadores`
+- `tecnologias` ↔ `operadores_telefonicos` (many-to-many via `tecnologias_operadores`)
+- `registros_claves` ↔ `canales` (many-to-many via `canales_claves`)
+- `escenarios` → belongsTo `canales` (origen/destino), belongsTo `numeros_externos`, belongsTo `errores`
 
-**Execution Status Values**: `PENDIENTE`, `CREADO`, `FINALIZADO`
-
-## Docker
-
-**Services** (docker-compose.yml):
-- `mysql` (port 3306) — MySQL 8.0 with mysql_native_password auth
-- `backend` (port 8082) — Node.js API, node:18-alpine, health check via wget
-- `frontend` (port 80) — PHP 8.4-apache, health check via curl
-
-**Dev Overlay** (docker-compose.dev.yml):
-- `phpmyadmin` (port 8080) — database management
-- `mailhog` (ports 1025/8025) — email testing
-- Mounts source code as volumes (with node_modules/vendor excluded)
-
-**Network**: Custom bridge `entel-network` (172.28.0.0/16). Services reference each other by container name (e.g., `http://backend:8082`).
-
-**Frontend Entrypoint** (`docker-entrypoint.sh`): Auto-generates `.env`, waits for MySQL (30 retries), generates APP_KEY, clears caches, creates storage symlink, optionally runs migrations (`RUN_MIGRATIONS=true`), caches config/routes.
+**Execution status values**: `PENDIENTE`, `CREADO`, `FINALIZADO`
+**Channel call states**: `LIBRE`, `SALIENTE`, `ENTRANTE`
+**Estado flags**: `A` (active), `D` (disabled)
 
 ## Configuration
 
-**Node.js Backend** (`monitor_system/.env`):
-- `DB_DIALECT` — sqlite (default), mysql, mariadb, postgres
-- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` — database connection
-- `DB_SQLITE_PATH` — SQLite file path (default: `data/database.sqlite`)
-- `ASTERISK_HOST`, `ASTERISK_PORT`, `ASTERISK_USER`, `ASTERISK_PASSWORD`, `ASTERISK_ENV` — Asterisk AMI
-- `LDAP_HOST`, `LDAP_BIND_DN`, `LDAP_BASE_DN`, `LDAP_BASE_USER`, `LDAP_TIMEOUT` — LDAP auth
-- `SMTP_HOST`, `SMTP_PORT` — email
-- `FTP_HOST`, `FTP_USER`, `FTP_PWD` — SFTP access
+### Backend (backend/.env)
 
-**Laravel Frontend** (`entel_frontend/.env`):
-- `API_URL` — Node.js backend URL (e.g., `http://localhost:8082/api/` or `http://backend:8082/api/` in Docker)
-- `DB_*` — database connection (same as backend)
-- `APP_KEY` — Laravel application key (generate with `php artisan key:generate`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `postgres://platform:platform123@localhost:5432/asistente_virtual` | PostgreSQL connection |
+| `PORT` | `3000` | API server port |
+| `JWT_SECRET` | — | HS256 signing key |
+| `JWT_EXPIRATION_HOURS` | `24` | Token lifetime |
+| `FRONTEND_URL` | `http://localhost:5173` | CORS origin |
+| `ASTERISK_HOST` | `localhost` | AMI host |
+| `ASTERISK_PORT` | `5038` | AMI port |
+| `ASTERISK_USER` | `admin` | AMI username |
+| `ASTERISK_PASSWORD` | `admin` | AMI password |
+| `ASTERISK_ENV` | `local` | `local` (write files) or `docker` (upload via SFTP) |
+| `SMTP_HOST` | `localhost` | SMTP server |
+| `SMTP_PORT` | `25` | SMTP port |
+| `FTP_HOST` | — | SFTP host for Asterisk config upload |
+| `FTP_USER` | — | SFTP username |
+| `FTP_PWD` | — | SFTP password |
+| `LDAP_HOST` | — | LDAP server (optional) |
+| `LDAP_BIND_DN` | — | LDAP bind DN |
+| `LDAP_BASE_DN` | — | LDAP base DN |
+| `LDAP_BASE_USER` | — | LDAP base user |
+| `LDAP_TIMEOUT` | `5000` | LDAP timeout (ms) |
+| `RUST_LOG` | `info` | Tracing filter level |
+
+### Docker (docker/.env)
+
+Same variables as above, plus:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_DB` | `asistente_virtual` | PostgreSQL database name |
+| `POSTGRES_USER` | `platform` | PostgreSQL user |
+| `POSTGRES_PASSWORD` | `platform123` | PostgreSQL password |
+
+## Docker
+
+### Production (docker/docker-compose.yml)
+
+Only Asterisk PBX is containerized. PostgreSQL, backend, and frontend run natively.
+
+- **asterisk** — Debian Bullseye with legacy chan_sip. Host network mode (ports 5060 SIP, 5038 AMI). Mounts dynamic monitoreo configs from `docker/data/asterisk/`.
+
+### Development Overlay (docker/docker-compose.dev.yml)
+
+Adds containerized versions of all services:
+
+| Service | Container | Port | Notes |
+|---------|-----------|------|-------|
+| backend | av-backend-dev | 3000 | cargo-watch live reload |
+| frontend | av-frontend-dev | 80 | Nginx proxying to Vite |
+| frontend-dev | av-vite-dev | 5173 | Vite HMR |
+| pgadmin | av-pgadmin | 5050 | admin@asistente.local / admin |
+| mailhog | av-mailhog | 1025/8025 | SMTP capture + web UI |
+
+Network: custom bridge `entel-network` (172.28.0.0/16).
+
+### Nginx (docker/nginx/)
+
+- `dev.conf` — Proxies `/api/` and `/ws/` to backend:3000, everything else to Vite dev server
+- `prod.conf` — Serves React static files, proxies API/WS, gzip compression, 1-year static asset cache
+
+### Asterisk (docker/asterisk/)
+
+- Built on Debian Bullseye (legacy chan_sip support, PJSIP disabled)
+- `entrypoint.sh` auto-generates `manager.conf` from env vars
+- Static configs: `sip.conf`, `extensions.conf`, `modules.conf`
+- Dynamic configs (generated by backend): `sip.monitoreo.conf`, `extensions.monitoreo.conf`
+- Mounted from `docker/data/asterisk/`

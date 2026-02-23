@@ -1,10 +1,13 @@
 # ============================================
 # Asterisk 16 - Sistema de Monitoreo VoIP
 # ============================================
-# Debian Bullseye ships Asterisk 16.2.x with chan_sip support
+# Debian Bullseye ships Asterisk 16 with chan_sip support.
+# Bookworm removed Asterisk from repos and Asterisk 21+
+# dropped chan_sip, so Bullseye is the right choice for
+# legacy SIP gateway compatibility.
 #
-# Build:  docker compose build asterisk
-# Shell:  docker compose exec asterisk asterisk -rx "core show version"
+# Build:  docker compose -f docker/docker-compose.yml build asterisk
+# Shell:  docker compose -f docker/docker-compose.yml exec asterisk asterisk -rx "core show version"
 # ============================================
 
 FROM debian:bullseye-slim
@@ -25,9 +28,9 @@ COPY modules.conf /etc/asterisk/modules.conf
 RUN touch /etc/asterisk/sip.monitoreo.conf \
     && touch /etc/asterisk/extensions.monitoreo.conf
 
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 5060/udp 5060/tcp 5038
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]

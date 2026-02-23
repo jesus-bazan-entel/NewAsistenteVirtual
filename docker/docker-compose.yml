@@ -1,0 +1,39 @@
+# ============================================
+# Docker Compose - AsistenteVirtual
+# ============================================
+# Solo Asterisk PBX dockerizado.
+# PostgreSQL, Backend y Frontend corren nativos en el servidor.
+#
+# Uso:
+#   Construir:       docker compose -f docker/docker-compose.yml build
+#   Iniciar:         docker compose -f docker/docker-compose.yml up -d
+#   Detener:         docker compose -f docker/docker-compose.yml down
+#   Logs:            docker compose -f docker/docker-compose.yml logs -f
+#   CLI Asterisk:    docker compose -f docker/docker-compose.yml exec asterisk asterisk -rvvv
+# ============================================
+
+services:
+  # ==========================================
+  # Asterisk PBX
+  # ==========================================
+  asterisk:
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+    container_name: av-asterisk
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      AMI_USER: ${ASTERISK_USER:-admin}
+      AMI_SECRET: ${ASTERISK_PASSWORD:-admin}
+      AMI_PERMIT: "0.0.0.0/0.0.0.0"
+    volumes:
+      - ./data/asterisk/sip.monitoreo.conf:/etc/asterisk/sip.monitoreo.conf
+      - ./data/asterisk/extensions.monitoreo.conf:/etc/asterisk/extensions.monitoreo.conf
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+

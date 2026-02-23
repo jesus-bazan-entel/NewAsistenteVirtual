@@ -1,0 +1,130 @@
+# ============================================
+# Docker Compose - Development Overlay
+# ============================================
+# Uso:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+#
+# Adds:
+#   - Source code volume mounts for hot-reload
+#   - pgAdmin 4 on port 5050
+#   - MailHog on ports 1025/8025
+#   - Vite dev server with HMR
+#   - cargo-watch for Rust backend live reload
+# ============================================
+
+services:
+  # ==========================================
+  # Backend with cargo-watch for live reload
+  # ==========================================
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: builder
+    container_name: av-backend-dev
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://platform:platform123@postgres:5432/asistente_virtual}
+      PORT: ${PORT:-3000}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-not-for-production}
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      ASTERISK_HOST: ${ASTERISK_HOST:-asterisk}
+      ASTERISK_PORT: ${ASTERISK_PORT:-5038}
+      ASTERISK_USER: ${ASTERISK_USER:-admin}
+      ASTERISK_PASSWORD: ${ASTERISK_PASSWORD:-admin}
+      ASTERISK_ENV: ${ASTERISK_ENV:-docker}
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      RUST_LOG: debug
+    volumes:
+      - ../backend:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    command: >
+      bash -c "
+        cargo install cargo-watch 2>/dev/null || true;
+        cargo watch -x run
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ==========================================
+  # Frontend - Vite dev server with HMR
+  # ==========================================
+  frontend:
+    image: nginx:alpine
+    container_name: av-frontend-dev
+    depends_on:
+      - frontend-dev
+      - backend
+    volumes:
+      - ../docker/nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+
+  # ==========================================
+  # Vite dev server (internal, proxied by nginx)
+  # ==========================================
+  frontend-dev:
+    image: node:20-alpine
+    container_name: av-vite-dev
+    working_dir: /app
+    volumes:
+      - ../frontend:/app
+      - frontend-node-modules:/app/node_modules
+    command: >
+      sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    networks:
+      - entel-network
+
+  # ==========================================
+  # pgAdmin 4 - PostgreSQL management
+  # ==========================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: av-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@asistente.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - entel-network
+
+  # ==========================================
+  # MailHog - Email testing
+  # ==========================================
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: av-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    networks:
+      - entel-network
+
+# ==========================================
+# Dev-only volumes
+# ==========================================
+volumes:
+  cargo-cache:
+    driver: local
+  target-cache:
+    driver: local
+  frontend-node-modules:
+    driver: local
+  pgadmin-data:
+    driver: local
